@@ -71,6 +71,7 @@ export async function request(path, { method = 'GET', body, skipAuth = false, is
       body: finalBody,
     });
   } catch (networkErr) {
+    console.error('RAW FETCH ERROR:', networkErr);
     throw new ApiError('Could not reach the server. Check your connection and try again.', 0, null);
   }
 
