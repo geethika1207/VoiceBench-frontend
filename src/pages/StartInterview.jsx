@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import Navbar from '../components/Navbar';
 import { startInterview } from '../api/interview';
+import { unlockAudio } from '../utils/audioUnlock';
 
 const SUGGESTIONS = ['Backend Developer', 'FastAPI', 'System Design', 'React', 'Machine Learning'];
 
@@ -15,6 +16,16 @@ export default function StartInterview() {
   async function handleSubmit(e) {
     e.preventDefault();
     if (!concept.trim()) return;
+
+    // Unlock the shared <audio> element synchronously, still inside this
+    // click-derived event, BEFORE the network round trip below. This ties
+    // the browser's autoplay grant to that exact element right at the
+    // moment of a genuine user gesture, so the interview screen's first
+    // question can play automatically even if starting the interview is
+    // slow (e.g. a cold-starting backend) and the gesture would otherwise
+    // have expired by the time we navigate there.
+    unlockAudio();
+
     setLoading(true);
     setError(null);
     try {

@@ -85,6 +85,7 @@ function normalizeInterviewDetail(raw) {
   const responses = Array.isArray(raw.responses) ? raw.responses : [];
 
   return {
+    hasAnalysis: analysisList.length > 0,
     interviewId: pick(latestAnalysis, ['interview_id'], null),
     score: pick(latestAnalysis, ['marks'], null),
     difficulty: pick(latestAnalysis, ['overall_difficulty'], null),
@@ -93,8 +94,11 @@ function normalizeInterviewDetail(raw) {
     suggestions: pick(latestAnalysis, ['suggestions'], []),
     tags: pick(latestAnalysis, ['learning_tags'], []),
     questions: responses
-      // Only answered questions carry a meaningful evaluation.
-      .filter((r) => r.answer)
+      // Only drop rows with neither a question nor an answer to show — NOT
+      // rows where `answer` happens to be falsy (empty string, etc.) but
+      // real data otherwise exists. A plain `.filter((r) => r.answer)`
+      // silently drops legitimate rows whenever `answer` is `""` or `null`.
+      .filter((r) => pick(r, ['question']) || pick(r, ['answer']))
       .map((r, i) => ({
         id: i,
         question: pick(r, ['question'], ''),
@@ -133,11 +137,23 @@ export async function endInterview(id) {
   return normalizeReport(raw);
 }
 
-/** GET /interview/history — list of past interviews. */
+/**
+ * GET /interview/history — list of past interviews.
+ *
+ * Sorted newest-first by creation timestamp here, once, at the shared data
+ * source. The backend returns rows in whatever order the database happens
+ * to give them (no ORDER BY), which was oldest-first. Both the Dashboard's
+ * "Recent Interviews" (which just takes the first 3 of whatever this
+ * returns) and the History page (which renders this list as-is) consume
+ * this same function, so sorting it once here fixes both without touching
+ * either page's component.
+ */
 export async function getHistory() {
   const raw = await request('/interview/history', { method: 'GET' });
   const list = Array.isArray(raw) ? raw : [];
-  return list.map(normalizeHistoryItem);
+  return list
+    .map(normalizeHistoryItem)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 /** GET /history/interview/{id} — full detail + report for one interview. */
@@ -151,3 +167,7 @@ export function deleteInterview(id) {
   return request(`/delete/interview/${id}`, { method: 'DELETE' });
 }
 
+/** DELETE /delete/history — remove every interview belonging to the current user. */
+export function deleteAllInterviews() {
+  return request('/delete/history', { method: 'DELETE' });
+}

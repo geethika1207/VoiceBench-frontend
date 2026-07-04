@@ -5,6 +5,7 @@ import VoiceAvatar from '../components/VoiceAvatar';
 import DifficultyBadge from '../components/DifficultyBadge';
 import { useInterviewMachine, STATES } from '../hooks/useInterviewMachine';
 import { formatTimer } from '../utils/format';
+import { getSharedAudioElement } from '../utils/audioUnlock';
 
 const WELCOME_LINES = [
   'Welcome to your AI Mock Interview.',
@@ -32,6 +33,7 @@ export default function InterviewScreen() {
     notifyAiAudioFailed,
     notifyRepeatFinished,
     endManually,
+    finishAnswering,
   } = useInterviewMachine({
     interviewId: id,
     firstQuestion,
@@ -40,6 +42,16 @@ export default function InterviewScreen() {
   });
 
   const audioRef = useRef(null);
+  if (!audioRef.current) {
+    audioRef.current = getSharedAudioElement();
+  }
+
+  useEffect(() => {
+    return () => {
+      const el = audioRef.current;
+      if (el) el.pause();
+    };
+  }, []);
 
   // ---- interview timer ----
   useEffect(() => {
@@ -68,6 +80,23 @@ export default function InterviewScreen() {
     return () => clearInterval(t);
   }, [spokenText]);
 
+  // ---- wire onEnded/onError on the shared element imperatively ----
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+
+    const isRepeat = state === STATES.REPEAT_QUESTION;
+    const onEnded = isRepeat ? notifyRepeatFinished : notifyAiFinishedSpeaking;
+    const onError = isRepeat ? notifyRepeatFinished : notifyAiAudioFailed;
+
+    el.addEventListener('ended', onEnded);
+    el.addEventListener('error', onError);
+    return () => {
+      el.removeEventListener('ended', onEnded);
+      el.removeEventListener('error', onError);
+    };
+  }, [state, notifyAiFinishedSpeaking, notifyAiAudioFailed, notifyRepeatFinished]);
+
   // ---- play question audio, only while AI_SPEAKING or REPEAT_QUESTION ----
   useEffect(() => {
     const isFirstPlay = state === STATES.AI_SPEAKING;
@@ -79,12 +108,34 @@ export default function InterviewScreen() {
     const src = question.audioUrl;
     const onDone = isFirstPlay ? notifyAiFinishedSpeaking : notifyRepeatFinished;
 
-    if (src) {
+    let retryTimer = null;
+    let cancelled = false;
+
+    function attemptPlay(isRetry) {
       el.src = src;
-      el.play().catch(() => onDone());
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          if (cancelled) return;
+          if (!isRetry) {
+            retryTimer = setTimeout(() => attemptPlay(true), 300);
+          } else {
+            onDone();
+          }
+        });
+      }
+    }
+
+    if (src) {
+      attemptPlay(false);
     } else {
       onDone();
     }
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, question]);
 
@@ -110,8 +161,6 @@ export default function InterviewScreen() {
     );
   }
 
-  // Reached only when the silence counter hits 3 — a dedicated screen, not
-  // the normal report flow, since there's no report to show here.
   if (state === STATES.SILENCE_ENDED) {
     return (
       <div className="page-shell" style={{ alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
@@ -140,13 +189,6 @@ export default function InterviewScreen() {
 
   return (
     <div className="interview-screen">
-      <audio
-        ref={audioRef}
-        onEnded={state === STATES.REPEAT_QUESTION ? notifyRepeatFinished : notifyAiFinishedSpeaking}
-        onError={state === STATES.REPEAT_QUESTION ? notifyRepeatFinished : notifyAiAudioFailed}
-        hidden
-      />
-
       <div className="interview-top container">
         <div className="interview-top-left">
           <span className="interview-topic">{topicLabel}</span>
@@ -155,6 +197,7 @@ export default function InterviewScreen() {
         <div className="interview-timer">{formatTimer(elapsed)}</div>
       </div>
 
+      {/* Static, unspoken welcome message — shown once on page load, never sent to TTS. */}
       <div className="container">
         <motion.div
           className="welcome-bubble glass"
@@ -174,8 +217,15 @@ export default function InterviewScreen() {
         <div className="status-line">
           {state === STATES.AI_SPEAKING && <span className="status-pill pill-violet">Speaking</span>}
           {state === STATES.REPEAT_QUESTION && <span className="status-pill pill-violet">Repeating the question…</span>}
-          {state === STATES.LISTENING && <span className="status-pill pill-teal">🎤 Listening…</span>}
-          {state === STATES.SILENCE_WARNING && <span className="status-pill pill-teal">🎤 Still listening…</span>}
+          {isListeningPhase && (
+            <button
+              className="status-pill pill-teal status-pill-clickable"
+              onClick={finishAnswering}
+              title="Click when you're done answering"
+            >
+              🎤 {state === STATES.SILENCE_WARNING ? 'Still listening…' : 'Listening…'} (tap to finish)
+            </button>
+          )}
           {state === STATES.PROCESSING_ANSWER && <span className="status-pill pill-violet">Preparing next question…</span>}
         </div>
 
@@ -215,7 +265,7 @@ export default function InterviewScreen() {
         <button
           className="btn btn-danger end-btn"
           onClick={endManually}
-          disabled={state === STATES.PROCESSING_ANSWER || state === STATES.INTERVIEW_ENDED}
+          disabled={state === STATES.PROCESSING_ANSWER || state === STATES.INTERVIEW_ENDED || state === STATES.SILENCE_ENDED}
         >
           End interview
         </button>
@@ -283,6 +333,17 @@ export default function InterviewScreen() {
         }
         .pill-violet { background: var(--accent-violet-soft); color: #c3b3ff; }
         .pill-teal { background: var(--accent-teal-soft); color: var(--accent-teal); }
+        .status-pill-clickable {
+          border: none;
+          cursor: pointer;
+          transition: background 0.2s var(--ease-out), transform 0.15s var(--ease-out);
+        }
+        .status-pill-clickable:hover {
+          background: rgba(63, 216, 201, 0.28);
+        }
+        .status-pill-clickable:active {
+          transform: scale(0.97);
+        }
         .interview-question {
           font-family: var(--font-display);
           font-size: clamp(20px, 3.2vw, 30px);
