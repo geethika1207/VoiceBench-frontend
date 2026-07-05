@@ -26,12 +26,12 @@ export default function InterviewScreen() {
   const [fatalError, setFatalError] = useState(null);
 
   const machine = useInterviewMachine({
-  interviewId: id,
-  firstQuestion: showIntro ? null : firstQuestion,
-  onFinished: (report) =>
-    navigate('/report', { state: { report, interviewId: id } }),
-  onFatal: (message) => setFatalError(message),
-});
+    interviewId: id,
+    firstQuestion,
+    onFinished: (report) =>
+      navigate('/report', { state: { report, interviewId: id } }),
+    onFatal: (message) => setFatalError(message),
+  });
 
   const {
     state,
@@ -238,14 +238,14 @@ return (
       </div>
 
       <div className="interview-center">
-        {!showIntro && (
+        {!showIntro && question && (
           <VoiceAvatar
             status={avatarStatus}
             level={level}
             onClick={isListeningPhase ? finishAnswering : null}
           />
         )}
-        {!showIntro && (
+        {!showIntro && question && (
         <div className="status-line">
           {state === STATES.AI_SPEAKING && <span className="status-pill pill-violet">Speaking</span>}
           {state === STATES.REPEAT_QUESTION && <span className="status-pill pill-violet">Repeating the question…</span>}
@@ -255,7 +255,7 @@ return (
         </div>
         )}
 
-        {!showIntro && (
+        {!showIntro && question && (
         <AnimatePresence mode="wait">
           <motion.p
             key={spokenText}
