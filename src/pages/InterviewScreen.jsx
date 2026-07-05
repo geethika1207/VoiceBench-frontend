@@ -11,6 +11,7 @@ const WELCOME_LINES = [
   'Welcome to your AI Mock Interview.',
   'You can answer naturally.',
   'You may ask to increase or decrease difficulty at any time.',
+  'Click "End Interview" to receive your complete interview report.',
 ];
 
 export default function InterviewScreen() {
