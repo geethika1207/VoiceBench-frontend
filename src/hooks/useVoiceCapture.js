@@ -1,24 +1,5 @@
 import { useCallback, useRef } from 'react';
 
-/**
- * Wraps getUserMedia + MediaRecorder + a WebAudio analyser so the interview
- * screen can:
- *  - record the candidate's answer
- *  - measure live volume to know when someone is speaking vs. silent
- *  - show a live transcript via the browser's SpeechRecognition API when
- *    available (Chrome/Edge). Falls back to a generic "Listening…"
- *    indicator on browsers without it (e.g. Safari, Firefox).
- *
- * ISSUE 2/3 FIX: `recognition.stop()` is asynchronous — the browser does
- * not guarantee the previous SpeechRecognition session has fully released
- * before a new one is started. On question 1 there's no prior session to
- * conflict with, so `.start()` always succeeds. From question 2 onward, if
- * the previous session hadn't fully torn down yet, starting a new one can
- * throw `InvalidStateError`, which was being silently swallowed — recording
- * itself kept working (a separate MediaRecorder), but the transcript never
- * started again. This version waits a beat after teardown before starting
- * a new recognition session, and retries once if the browser still throws.
- */
 export function useVoiceCapture() {
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
@@ -26,14 +7,40 @@ export function useVoiceCapture() {
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
   const rafRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const recognitionStopPromiseRef = useRef(Promise.resolve());
+  const recognitionRef = useRef(null); // ONE instance, reused for the whole interview
+  const recognitionActiveRef = useRef(false);
+  const onTranscriptRef = useRef(null);
+
+  function getOrCreateRecognition() {
+    if (recognitionRef.current) return recognitionRef.current;
+    const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionClass) return null;
+
+    const recognition = new SpeechRecognitionClass();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.onresult = (event) => {
+      let text = '';
+      for (let i = 0; i < event.results.length; i++) {
+        text += event.results[i][0].transcript;
+      }
+      onTranscriptRef.current?.(text);
+    };
+    recognition.onend = () => {
+      recognitionActiveRef.current = false;
+    };
+    recognition.onerror = () => {
+      recognitionActiveRef.current = false;
+    };
+    recognitionRef.current = recognition;
+    return recognition;
+  }
 
   const start = useCallback(async ({ onVolume, onTranscript } = {}) => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
 
-    // --- volume analysis ---
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioContextClass();
     const source = audioCtx.createMediaStreamSource(stream);
@@ -57,7 +64,6 @@ export function useVoiceCapture() {
     }
     rafRef.current = requestAnimationFrame(tick);
 
-    // --- recording ---
     chunksRef.current = [];
     const mimeType = MediaRecorder.isTypeSupported('audio/webm')
       ? 'audio/webm'
@@ -71,48 +77,18 @@ export function useVoiceCapture() {
     recorder.start();
     recorderRef.current = recorder;
 
-    // --- live transcript ---
-    // Wait for the previous session's teardown to actually finish before
-    // starting a new one — this is the fix for the "transcript only works
-    // on question 1" bug. `recognitionStopPromiseRef` resolves once the
-    // last `stop()`/`cancel()` call has settled.
-    await recognitionStopPromiseRef.current;
-
-    const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognitionClass && onTranscript) {
-      startRecognition(SpeechRecognitionClass, onTranscript, /* isRetry */ false);
+    onTranscriptRef.current = onTranscript || null;
+    const recognition = getOrCreateRecognition();
+    if (recognition && !recognitionActiveRef.current) {
+      try {
+        recognition.start();
+        recognitionActiveRef.current = true;
+      } catch {
+        recognitionActiveRef.current = false;
+      }
     }
   }, []);
 
-  function startRecognition(SpeechRecognitionClass, onTranscript, isRetry) {
-    try {
-      const recognition = new SpeechRecognitionClass();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.onresult = (event) => {
-        let text = '';
-        for (let i = 0; i < event.results.length; i++) {
-          text += event.results[i][0].transcript;
-        }
-        onTranscript(text);
-      };
-      recognition.onerror = () => {};
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch {
-      recognitionRef.current = null;
-      if (!isRetry) {
-        // The previous session likely hadn't fully released yet — wait a
-        // beat and try exactly once more before giving up for this
-        // question (falling back to no live transcript, but recording
-        // continues normally either way).
-        setTimeout(() => startRecognition(SpeechRecognitionClass, onTranscript, true), 250);
-      }
-    }
-  }
-
-  /** Stops everything and resolves with the recorded audio Blob. */
   const stop = useCallback(() => {
     return new Promise((resolve) => {
       const recorder = recorderRef.current;
@@ -134,23 +110,14 @@ export function useVoiceCapture() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
 
-    // Track when the recognition session actually finishes stopping, so the
-    // *next* start() can wait for it instead of racing it.
-    if (recognitionRef.current) {
-      const recognition = recognitionRef.current;
-      recognitionStopPromiseRef.current = new Promise((resolve) => {
-        const finish = () => resolve();
-        try {
-          recognition.onend = finish;
-          recognition.stop();
-          // Safety net: some browsers never fire onend reliably after stop().
-          setTimeout(finish, 300);
-        } catch {
-          finish();
-        }
-      });
-      recognitionRef.current = null;
+    if (recognitionRef.current && recognitionActiveRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        /* noop */
+      }
     }
+    onTranscriptRef.current = null;
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -164,7 +131,6 @@ export function useVoiceCapture() {
     recorderRef.current = null;
   }
 
-  /** Hard cancel without resolving a blob (e.g. component unmount). */
   const cancel = useCallback(() => {
     try {
       recorderRef.current?.stop();
