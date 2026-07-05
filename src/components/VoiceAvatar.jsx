@@ -5,14 +5,18 @@ import { motion } from 'framer-motion';
  * that pulse to the live volume level while the AI speaks or the user talks.
  * status: 'idle' | 'speaking' | 'listening' | 'thinking'
  * level: 0..1 live volume, used to scale the rings while listening.
+ * onClick: optional — when provided and status === 'listening', the whole
+ *   avatar becomes a clickable button (manual "finish answering"), with no
+ *   text label; the mic icon itself is the affordance.
  */
-export default function VoiceAvatar({ status = 'idle', level = 0 }) {
+export default function VoiceAvatar({ status = 'idle', level = 0, onClick = null }) {
   const isActive = status === 'speaking' || status === 'listening';
+  const isClickable = status === 'listening' && typeof onClick === 'function';
   const color = status === 'listening' ? 'var(--accent-teal)' : 'var(--accent-violet)';
   const scale = 1 + Math.min(level, 1) * 0.35;
 
-  return (
-    <div className="voice-avatar" aria-hidden="true">
+  const content = (
+    <div className="voice-avatar" aria-hidden={!isClickable}>
       <motion.div
         className="voice-avatar-ring ring-3"
         style={{ borderColor: color }}
@@ -68,6 +72,38 @@ export default function VoiceAvatar({ status = 'idle', level = 0 }) {
           </g>
         </svg>
       </motion.div>
+
+      <style>{`
+        .voice-avatar-clickable {
+          cursor: pointer;
+          background: none;
+          border: none;
+          padding: 0;
+          transition: transform 0.15s ease-out;
+        }
+        .voice-avatar-clickable:hover .voice-avatar-core {
+          filter: brightness(1.08);
+        }
+        .voice-avatar-clickable:active {
+          transform: scale(0.97);
+        }
+      `}</style>
     </div>
   );
+
+  if (isClickable) {
+    return (
+      <button
+        type="button"
+        className="voice-avatar-clickable"
+        onClick={onClick}
+        aria-label="Finish answering"
+        title="Tap when you're done answering"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return content;
 }

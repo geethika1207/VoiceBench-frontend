@@ -212,20 +212,13 @@ export default function InterviewScreen() {
       </div>
 
       <div className="interview-center">
-        <VoiceAvatar status={avatarStatus} level={level} />
+        <VoiceAvatar status={avatarStatus} level={level} onClick={isListeningPhase ? finishAnswering : null} />
 
         <div className="status-line">
           {state === STATES.AI_SPEAKING && <span className="status-pill pill-violet">Speaking</span>}
           {state === STATES.REPEAT_QUESTION && <span className="status-pill pill-violet">Repeating the question…</span>}
-          {isListeningPhase && (
-            <button
-              className="status-pill pill-teal status-pill-clickable"
-              onClick={finishAnswering}
-              title="Click when you're done answering"
-            >
-              🎤 {state === STATES.SILENCE_WARNING ? 'Still listening…' : 'Listening…'} (tap to finish)
-            </button>
-          )}
+          {state === STATES.LISTENING && <span className="status-pill pill-teal">🎤 Listening…</span>}
+          {state === STATES.SILENCE_WARNING && <span className="status-pill pill-teal">🎤 Still listening…</span>}
           {state === STATES.PROCESSING_ANSWER && <span className="status-pill pill-violet">Preparing next question…</span>}
         </div>
 
@@ -333,17 +326,6 @@ export default function InterviewScreen() {
         }
         .pill-violet { background: var(--accent-violet-soft); color: #c3b3ff; }
         .pill-teal { background: var(--accent-teal-soft); color: var(--accent-teal); }
-        .status-pill-clickable {
-          border: none;
-          cursor: pointer;
-          transition: background 0.2s var(--ease-out), transform 0.15s var(--ease-out);
-        }
-        .status-pill-clickable:hover {
-          background: rgba(63, 216, 201, 0.28);
-        }
-        .status-pill-clickable:active {
-          transform: scale(0.97);
-        }
         .interview-question {
           font-family: var(--font-display);
           font-size: clamp(20px, 3.2vw, 30px);

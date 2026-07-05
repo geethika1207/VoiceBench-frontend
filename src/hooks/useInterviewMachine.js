@@ -19,22 +19,36 @@ const WAIT_AFTER_AUDIO_MS = 2000;
 const INITIAL_SILENCE_MS = 4500;
 const WARNING_GRACE_MS = 2500;
 const REPEAT_SILENCE_MS = 4500;
-
-// ISSUE 1 FIX: this was 2800ms combined with a 2-tick debounce (~3.2s total)
-// — noticeably longer than the "2-3 seconds" a natural finish should take.
-// Lowered to 2200ms with a single-tick check (200ms resolution is already
-// fine-grained enough on its own; the previous debounce was compensating
-// for a much shorter threshold from an earlier version, not this one).
 const TRAILING_SILENCE_MS = 2200;
-
 const VOLUME_THRESHOLD = 0.02;
 const MAX_SILENCE_SKIPS = 3;
 
 /**
  * Single-threaded interview state machine — one hook, one owner of every
- * timer and the microphone session. `InterviewScreen.jsx` only renders
- * based on `state` and forwards `<audio>` events into this hook; it never
- * touches the mic or a timer directly.
+ * timer and the microphone session.
+ *
+ * ROOT-CAUSE FIX FOR THIS ROUND: previously, the internal transition
+ * functions (armInitialSilenceWatch, armWarningGraceWatch,
+ * armTrailingSilenceWatch, enterRepeatQuestion, handleSilenceSkip,
+ * finalizeAnswer) called each other by directly referencing the `const`
+ * bound in a PREVIOUS render's closure, because their own `useCallback`
+ * dependency arrays only listed stable primitives — so React never
+ * recreated them, and the names they referenced internally resolved to
+ * stale versions of each other (each closing over an old `capture` object
+ * from `useVoiceCapture()`, which returns a brand-new object every
+ * render). After a few question cycles, enough of these stale layers
+ * stacked up that a click or a live transcript callback would silently
+ * operate on a dead MediaRecorder/SpeechRecognition instance instead of
+ * the real, currently-live one — explaining why Q1/Q2 worked (not enough
+ * stale layers yet) and Q3+ didn't.
+ *
+ * The fix: every one of these functions is now defined ONCE, and they
+ * call each other through a single `fnsRef` object that is reassigned in
+ * full on every render, right before returning. There is exactly one
+ * live copy of "the current version of every transition function" at
+ * all times, so a click handler or a timer firing from any point in the
+ * interview always reaches code closing over the CURRENT `capture`
+ * object — never a stale one from a prior render.
  */
 export function useInterviewMachine({ interviewId, firstQuestion, onFinished, onFatal }) {
   const [state, setState] = useState(STATES.AI_SPEAKING);
@@ -52,7 +66,14 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   const lastVoiceTsRef = useRef(0);
   const isRepeatPassRef = useRef(false);
   const timerHandleRef = useRef(null);
-  const activeSessionGenRef = useRef(null); // ISSUE 1 FIX: lets the manual "finish answering" button target the live session
+  const activeSessionGenRef = useRef(null);
+
+  // Single source of truth for "the current version of every internal
+  // transition function." Reassigned every render (see bottom of hook),
+  // so anything invoked through it — from a timer, a click, or a mic
+  // callback scheduled in ANY prior render — always runs the version
+  // closing over this render's `capture`, `interviewId`, etc.
+  const fnsRef = useRef({});
 
   const clearPendingTimer = useCallback(() => {
     if (timerHandleRef.current) {
@@ -96,11 +117,6 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     let cancelled = false;
     const mySessionGen = ++sessionGenRef.current;
     activeSessionGenRef.current = mySessionGen;
-
-    // ISSUE 2 FIX: reset the transcript for every new recording session,
-    // not just implicitly on the first one — this is the state the view
-    // reads, so it must be cleared here every time a fresh mic session
-    // begins, regardless of which question number this is.
     setTranscript('');
 
     (async () => {
@@ -119,11 +135,15 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
                 isRepeatPassRef.current = false;
                 setNotice(null);
                 setState(STATES.LISTENING);
-                armTrailingSilenceWatch(mySessionGen);
+                fnsRef.current.armTrailingSilenceWatch(mySessionGen);
               }
             }
           },
           onTranscript: (text) => {
+            // Reached via the CURRENT render's `capture.start()` call every
+            // time — this callback itself was never the stale part, but it's
+            // routed the same way as everything else for consistency and to
+            // guarantee it, too, is always checked against the live session.
             if (!isSessionCurrent(mySessionGen)) return;
             setTranscript(text);
           },
@@ -140,7 +160,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
         return;
       }
 
-      armInitialSilenceWatch(mySessionGen);
+      fnsRef.current.armInitialSilenceWatch(mySessionGen);
     })();
 
     return () => {
@@ -149,156 +169,132 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
-  const armInitialSilenceWatch = useCallback(
-    (mySessionGen) => {
-      clearPendingTimer();
-      const myTimerGen = timerGenRef.current;
-      const repeatPass = isRepeatPassRef.current;
-      const waitMs = repeatPass ? REPEAT_SILENCE_MS : INITIAL_SILENCE_MS;
+  function armInitialSilenceWatch(mySessionGen) {
+    clearPendingTimer();
+    const myTimerGen = timerGenRef.current;
+    const repeatPass = isRepeatPassRef.current;
+    const waitMs = repeatPass ? REPEAT_SILENCE_MS : INITIAL_SILENCE_MS;
 
-      timerHandleRef.current = setTimeout(() => {
-        if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen) || hasSpokenRef.current) return;
-        if (repeatPass) {
-          handleSilenceSkip(mySessionGen);
-        } else {
-          setNotice('Are you still there?');
-          setState(STATES.SILENCE_WARNING);
-          armWarningGraceWatch(mySessionGen);
-        }
-      }, waitMs);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [clearPendingTimer, isTimerCurrent, isSessionCurrent]
-  );
+    timerHandleRef.current = setTimeout(() => {
+      if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen) || hasSpokenRef.current) return;
+      if (repeatPass) {
+        fnsRef.current.handleSilenceSkip(mySessionGen);
+      } else {
+        setNotice('Are you still there?');
+        setState(STATES.SILENCE_WARNING);
+        fnsRef.current.armWarningGraceWatch(mySessionGen);
+      }
+    }, waitMs);
+  }
 
-  const armWarningGraceWatch = useCallback(
-    (mySessionGen) => {
-      clearPendingTimer();
-      const myTimerGen = timerGenRef.current;
-      timerHandleRef.current = setTimeout(() => {
-        if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen)) return;
-        enterRepeatQuestion(mySessionGen);
-      }, WARNING_GRACE_MS);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [clearPendingTimer, isTimerCurrent, isSessionCurrent]
-  );
+  function armWarningGraceWatch(mySessionGen) {
+    clearPendingTimer();
+    const myTimerGen = timerGenRef.current;
+    timerHandleRef.current = setTimeout(() => {
+      if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen)) return;
+      fnsRef.current.enterRepeatQuestion(mySessionGen);
+    }, WARNING_GRACE_MS);
+  }
 
-  /** ISSUE 1 FIX: single source of truth for "the trailing-silence window has elapsed", now reused by both the timer and the manual button. */
-  const armTrailingSilenceWatch = useCallback(
-    (mySessionGen) => {
-      clearPendingTimer();
-      const myTimerGen = timerGenRef.current;
-      timerHandleRef.current = setInterval(() => {
-        if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen)) return;
-        if (Date.now() - lastVoiceTsRef.current > TRAILING_SILENCE_MS) {
-          finalizeAnswer(mySessionGen);
-        }
-      }, 200);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [clearPendingTimer, isTimerCurrent, isSessionCurrent]
-  );
+  function armTrailingSilenceWatch(mySessionGen) {
+    clearPendingTimer();
+    const myTimerGen = timerGenRef.current;
+    timerHandleRef.current = setInterval(() => {
+      if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen)) return;
+      if (Date.now() - lastVoiceTsRef.current > TRAILING_SILENCE_MS) {
+        fnsRef.current.finalizeAnswer(mySessionGen);
+      }
+    }, 200);
+  }
 
-  const enterRepeatQuestion = useCallback(
-    (mySessionGen) => {
-      if (!isSessionCurrent(mySessionGen)) return;
+  function enterRepeatQuestion(mySessionGen) {
+    if (!isSessionCurrent(mySessionGen)) return;
+    clearPendingTimer();
+    sessionGenRef.current += 1;
+    capture.cancel();
+    hasSpokenRef.current = false;
+    isRepeatPassRef.current = true;
+    setNotice(null);
+    setState(STATES.REPEAT_QUESTION);
+  }
+
+  async function handleSilenceSkip(mySessionGen) {
+    if (!isSessionCurrent(mySessionGen)) return;
+    isRepeatPassRef.current = false;
+    silenceSkipsRef.current += 1;
+    setSilenceCounter(silenceSkipsRef.current);
+
+    if (silenceSkipsRef.current >= MAX_SILENCE_SKIPS) {
       clearPendingTimer();
       sessionGenRef.current += 1;
       capture.cancel();
-      hasSpokenRef.current = false;
-      isRepeatPassRef.current = true;
       setNotice(null);
-      setState(STATES.REPEAT_QUESTION);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [capture, clearPendingTimer, isSessionCurrent]
-  );
+      setState(STATES.SILENCE_ENDED);
+      return;
+    }
 
-  const handleSilenceSkip = useCallback(
-    async (mySessionGen) => {
-      if (!isSessionCurrent(mySessionGen)) return;
-      isRepeatPassRef.current = false;
-      silenceSkipsRef.current += 1;
-      setSilenceCounter(silenceSkipsRef.current);
+    await fnsRef.current.finalizeAnswer(mySessionGen);
+  }
 
-      if (silenceSkipsRef.current >= MAX_SILENCE_SKIPS) {
-        clearPendingTimer();
-        sessionGenRef.current += 1;
-        capture.cancel();
-        setNotice(null);
-        setState(STATES.SILENCE_ENDED);
+  async function finalizeAnswer(mySessionGen) {
+    if (!isSessionCurrent(mySessionGen)) return;
+    isRepeatPassRef.current = false;
+
+    clearPendingTimer();
+    sessionGenRef.current += 1;
+    setState(STATES.PROCESSING_ANSWER);
+    setNotice(null);
+    const nextSessionGen = sessionGenRef.current;
+
+    let blob = null;
+    try {
+      blob = await capture.stop();
+    } catch {
+      /* fall through */
+    }
+    if (!isSessionCurrent(nextSessionGen)) return;
+
+    const audioBlob = blob || new Blob([], { type: 'audio/mp3' });
+
+    try {
+      const next = await submitAnswer(interviewId, audioBlob);
+      if (!isSessionCurrent(nextSessionGen)) return;
+
+      if (!next || !next.question) {
+        setState(STATES.INTERVIEW_ENDED);
+        try {
+          const report = await endInterview(interviewId);
+          onFinished?.(report);
+        } catch {
+          onFinished?.(null);
+        }
         return;
       }
 
-      await finalizeAnswer(mySessionGen);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [capture, isSessionCurrent, clearPendingTimer]
-  );
-
-  const finalizeAnswer = useCallback(
-    async (mySessionGen) => {
-      if (!isSessionCurrent(mySessionGen)) return;
-      isRepeatPassRef.current = false;
-
-      clearPendingTimer();
-      sessionGenRef.current += 1;
-      setState(STATES.PROCESSING_ANSWER);
-      setNotice(null);
-      const nextSessionGen = sessionGenRef.current;
-
-      let blob = null;
-      try {
-        blob = await capture.stop();
-      } catch {
-        /* fall through */
-      }
+      setQuestion(next);
+      setState(STATES.AI_SPEAKING);
+    } catch (err) {
       if (!isSessionCurrent(nextSessionGen)) return;
-
-      const audioBlob = blob || new Blob([], { type: 'audio/mp3' });
-
-      try {
-        const next = await submitAnswer(interviewId, audioBlob);
-        if (!isSessionCurrent(nextSessionGen)) return;
-
-        if (!next || !next.question) {
-          setState(STATES.INTERVIEW_ENDED);
-          try {
-            const report = await endInterview(interviewId);
-            onFinished?.(report);
-          } catch {
-            onFinished?.(null);
-          }
-          return;
-        }
-
-        setQuestion(next);
-        setState(STATES.AI_SPEAKING);
-      } catch (err) {
-        if (!isSessionCurrent(nextSessionGen)) return;
-        setState(STATES.FATAL_ERROR);
-        onFatal?.(err.message || 'Something went wrong submitting your answer.');
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [capture, interviewId, isSessionCurrent, clearPendingTimer, onFinished, onFatal]
-  );
+      setState(STATES.FATAL_ERROR);
+      onFatal?.(err.message || 'Something went wrong submitting your answer.');
+    }
+  }
 
   /**
-   * ISSUE 1 FIX (Method 2 — manual finish): lets the view end recording on
-   * demand, e.g. from a click on the "Listening…" indicator. Only acts if
-   * we're actually in a listening phase for the currently-live session —
-   * a stale click after the state has already moved on is a no-op, same
-   * generation-guard discipline as every other transition in this file.
+   * Manual finish (Problem 2 / Method B). Reads `activeSessionGenRef` —
+   * always written by the LISTENING-entry effect for the currently live
+   * session — and calls through `fnsRef` so it always reaches the CURRENT
+   * render's real `finalizeAnswer`, regardless of how many question
+   * cycles have happened. This is what was breaking after Q2: the old
+   * code called `finalizeAnswer` directly by name, which (per the root
+   * cause above) could be a stale closure by then.
    */
   const finishAnswering = useCallback(() => {
     const mySessionGen = activeSessionGenRef.current;
     if (mySessionGen === null || !isSessionCurrent(mySessionGen)) return;
     if (state !== STATES.LISTENING && state !== STATES.SILENCE_WARNING) return;
-    finalizeAnswer(mySessionGen);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, isSessionCurrent, finalizeAnswer]);
+    fnsRef.current.finalizeAnswer(mySessionGen);
+  }, [state, isSessionCurrent]);
 
   const endManually = useCallback(async () => {
     clearPendingTimer();
@@ -339,6 +335,18 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reassign EVERY render, unconditionally, so fnsRef.current always holds
+  // this render's real functions — the single fix eliminating the stale-
+  // closure drift described above.
+  fnsRef.current = {
+    armInitialSilenceWatch,
+    armWarningGraceWatch,
+    armTrailingSilenceWatch,
+    enterRepeatQuestion,
+    handleSilenceSkip,
+    finalizeAnswer,
+  };
 
   return {
     state,
