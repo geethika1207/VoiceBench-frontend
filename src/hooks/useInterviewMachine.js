@@ -92,6 +92,9 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     console.log('[machine] opening new session, sessionGen=', mySessionGen);
     setTranscript('');
 
+    hasSpokenRef.current = false;
+    lastVoiceTsRef.current = 0;
+
     (async () => {
       try {
         console.log("capture.start() called");
@@ -224,6 +227,11 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     isRepeatPassRef.current = false;
 
     clearPendingTimer();
+
+    hasSpokenRef.current = false;
+    lastVoiceTsRef.current = 0;
+    activeSessionGenRef.current = null;
+
     sessionGenRef.current += 1;
     setState(STATES.PROCESSING_ANSWER);
     setNotice(null);
@@ -259,6 +267,15 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
         }
         return;
       }
+
+      hasSpokenRef.current = false;
+      activeSessionGenRef.current = null;
+      lastVoiceTsRef.current = 0;
+      isRepeatPassRef.current = false;
+
+      setTranscript('');
+      setNotice(null);
+      setLevel(0);
 
       setQuestion(next);
       setState(STATES.AI_SPEAKING);
