@@ -80,11 +80,11 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   }, [state]);
 
   useEffect(() => {
-    console.log('[machine] LISTENING effect ran, state=', state, 'hasSpoken=', hasSpokenRef.current);
-    if (state !== STATES.LISTENING || hasSpokenRef.current) {
-      console.log('[machine] LISTENING effect BAILED OUT (guard blocked it)');
-      return;
-    }
+    console.log("========== ENTER LISTENING EFFECT ==========");
+    console.log("state:", state);
+    console.log("hasSpoken:", hasSpokenRef.current);
+    if (state !== STATES.LISTENING || hasSpokenRef.current) return;
+    
 
     let cancelled = false;
     const mySessionGen = ++sessionGenRef.current;
@@ -94,6 +94,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
 
     (async () => {
       try {
+        console.log("capture.start() called");
         await capture.start({
           onVolume: (rms) => {
             if (!isSessionCurrent(mySessionGen)) return;
@@ -114,6 +115,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
             }
           },
           onTranscript: (text) => {
+            console.log("TRANSCRIPT:", text);
             if (!isSessionCurrent(mySessionGen)) {
               console.log('[machine] onTranscript IGNORED — stale session. mySessionGen=', mySessionGen, 'current=', sessionGenRef.current);
               return;
