@@ -21,6 +21,7 @@ export function useVoiceCapture() {
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.onresult = (event) => {
+      console.log('[capture] onresult fired');
       let text = '';
       for (let i = 0; i < event.results.length; i++) {
         text += event.results[i][0].transcript;
@@ -28,9 +29,11 @@ export function useVoiceCapture() {
       onTranscriptRef.current?.(text);
     };
     recognition.onend = () => {
+      console.log('[capture] onend fired');
       recognitionActiveRef.current = false;
     };
-    recognition.onerror = () => {
+    recognition.onerror = (event) => {
+      console.log('[capture] onerror fired:', event.error);
       recognitionActiveRef.current = false;
     };
     recognitionRef.current = recognition;
@@ -38,7 +41,9 @@ export function useVoiceCapture() {
   }
 
   const start = useCallback(async ({ onVolume, onTranscript } = {}) => {
+    console.log('[capture] start() called');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log('[capture] getUserMedia resolved');
     streamRef.current = stream;
 
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -76,28 +81,35 @@ export function useVoiceCapture() {
     };
     recorder.start();
     recorderRef.current = recorder;
+    console.log('[capture] MediaRecorder started, state=', recorder.state);
 
     onTranscriptRef.current = onTranscript || null;
     const recognition = getOrCreateRecognition();
+    console.log('[capture] about to call recognition.start(), recognitionActiveRef =', recognitionActiveRef.current, 'recognition exists =', !!recognition);
     if (recognition && !recognitionActiveRef.current) {
       try {
         recognition.start();
         recognitionActiveRef.current = true;
-      } catch {
+        console.log('[capture] recognition.start() succeeded');
+      } catch (err) {
+        console.log('[capture] recognition.start() THREW:', err.name, err.message);
         recognitionActiveRef.current = false;
       }
     }
   }, []);
 
   const stop = useCallback(() => {
+    console.log('[capture] stop() called, recorder state=', recorderRef.current?.state);
     return new Promise((resolve) => {
       const recorder = recorderRef.current;
       if (!recorder || recorder.state === 'inactive') {
+        console.log('[capture] stop() — recorder missing or already inactive, resolving null');
         resolve(null);
         return;
       }
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        console.log('[capture] recorder.onstop fired, blob size=', blob.size);
         resolve(blob.size > 0 ? blob : null);
       };
       recorder.stop();
@@ -107,14 +119,16 @@ export function useVoiceCapture() {
   }, []);
 
   function teardown() {
+    console.log('[capture] teardown() called');
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
 
     if (recognitionRef.current && recognitionActiveRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch {
-        /* noop */
+        console.log('[capture] recognition.stop() called in teardown');
+      } catch (err) {
+        console.log('[capture] recognition.stop() THREW in teardown:', err.name, err.message);
       }
     }
     onTranscriptRef.current = null;
@@ -132,6 +146,7 @@ export function useVoiceCapture() {
   }
 
   const cancel = useCallback(() => {
+    console.log('[capture] cancel() called');
     try {
       recorderRef.current?.stop();
     } catch {

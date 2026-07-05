@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVoiceCapture } from './useVoiceCapture';
 import { submitAnswer, endInterview } from '../api/interview';
 
-/** Exactly one of these is ever active. Identical sequence for every question, including the first. */
 export const STATES = {
   AI_SPEAKING: 'AI_SPEAKING',
   WAIT_AFTER_AUDIO: 'WAIT_AFTER_AUDIO',
@@ -23,33 +22,6 @@ const TRAILING_SILENCE_MS = 2200;
 const VOLUME_THRESHOLD = 0.02;
 const MAX_SILENCE_SKIPS = 3;
 
-/**
- * Single-threaded interview state machine — one hook, one owner of every
- * timer and the microphone session.
- *
- * ROOT-CAUSE FIX FOR THIS ROUND: previously, the internal transition
- * functions (armInitialSilenceWatch, armWarningGraceWatch,
- * armTrailingSilenceWatch, enterRepeatQuestion, handleSilenceSkip,
- * finalizeAnswer) called each other by directly referencing the `const`
- * bound in a PREVIOUS render's closure, because their own `useCallback`
- * dependency arrays only listed stable primitives — so React never
- * recreated them, and the names they referenced internally resolved to
- * stale versions of each other (each closing over an old `capture` object
- * from `useVoiceCapture()`, which returns a brand-new object every
- * render). After a few question cycles, enough of these stale layers
- * stacked up that a click or a live transcript callback would silently
- * operate on a dead MediaRecorder/SpeechRecognition instance instead of
- * the real, currently-live one — explaining why Q1/Q2 worked (not enough
- * stale layers yet) and Q3+ didn't.
- *
- * The fix: every one of these functions is now defined ONCE, and they
- * call each other through a single `fnsRef` object that is reassigned in
- * full on every render, right before returning. There is exactly one
- * live copy of "the current version of every transition function" at
- * all times, so a click handler or a timer firing from any point in the
- * interview always reaches code closing over the CURRENT `capture`
- * object — never a stale one from a prior render.
- */
 export function useInterviewMachine({ interviewId, firstQuestion, onFinished, onFatal }) {
   const [state, setState] = useState(STATES.AI_SPEAKING);
   const [question, setQuestion] = useState(firstQuestion || null);
@@ -67,12 +39,6 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   const isRepeatPassRef = useRef(false);
   const timerHandleRef = useRef(null);
   const activeSessionGenRef = useRef(null);
-
-  // Single source of truth for "the current version of every internal
-  // transition function." Reassigned every render (see bottom of hook),
-  // so anything invoked through it — from a timer, a click, or a mic
-  // callback scheduled in ANY prior render — always runs the version
-  // closing over this render's `capture`, `interviewId`, etc.
   const fnsRef = useRef({});
 
   const clearPendingTimer = useCallback(() => {
@@ -97,6 +63,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
 
   useEffect(() => {
     if (state !== STATES.WAIT_AFTER_AUDIO) return;
+    console.log('[machine] entered WAIT_AFTER_AUDIO');
     clearPendingTimer();
     setNotice(null);
     setTranscript('');
@@ -104,6 +71,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     const myTimerGen = timerGenRef.current;
     timerHandleRef.current = setTimeout(() => {
       if (!isTimerCurrent(myTimerGen)) return;
+      console.log('[machine] WAIT_AFTER_AUDIO timer fired -> LISTENING');
       setState(STATES.LISTENING);
     }, WAIT_AFTER_AUDIO_MS);
 
@@ -112,11 +80,16 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   }, [state]);
 
   useEffect(() => {
-    if (state !== STATES.LISTENING || hasSpokenRef.current) return;
+    console.log('[machine] LISTENING effect ran, state=', state, 'hasSpoken=', hasSpokenRef.current);
+    if (state !== STATES.LISTENING || hasSpokenRef.current) {
+      console.log('[machine] LISTENING effect BAILED OUT (guard blocked it)');
+      return;
+    }
 
     let cancelled = false;
     const mySessionGen = ++sessionGenRef.current;
     activeSessionGenRef.current = mySessionGen;
+    console.log('[machine] opening new session, sessionGen=', mySessionGen);
     setTranscript('');
 
     (async () => {
@@ -131,6 +104,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
               const wasFirstSpeech = !hasSpokenRef.current;
               hasSpokenRef.current = true;
               if (wasFirstSpeech) {
+                console.log('[machine] first speech detected, sessionGen=', mySessionGen);
                 clearPendingTimer();
                 isRepeatPassRef.current = false;
                 setNotice(null);
@@ -140,15 +114,16 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
             }
           },
           onTranscript: (text) => {
-            // Reached via the CURRENT render's `capture.start()` call every
-            // time — this callback itself was never the stale part, but it's
-            // routed the same way as everything else for consistency and to
-            // guarantee it, too, is always checked against the live session.
-            if (!isSessionCurrent(mySessionGen)) return;
+            if (!isSessionCurrent(mySessionGen)) {
+              console.log('[machine] onTranscript IGNORED — stale session. mySessionGen=', mySessionGen, 'current=', sessionGenRef.current);
+              return;
+            }
             setTranscript(text);
           },
         });
-      } catch {
+        console.log('[machine] capture.start() resolved for sessionGen=', mySessionGen);
+      } catch (err) {
+        console.log('[machine] capture.start() THREW:', err);
         if (cancelled || !isSessionCurrent(mySessionGen)) return;
         setState(STATES.FATAL_ERROR);
         onFatal?.('Microphone access is required for the voice interview. Please allow microphone permissions and refresh.');
@@ -156,6 +131,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
       }
 
       if (cancelled || !isSessionCurrent(mySessionGen)) {
+        console.log('[machine] session superseded right after capture.start(), cancelling. mySessionGen=', mySessionGen, 'current=', sessionGenRef.current);
         capture.cancel();
         return;
       }
@@ -202,6 +178,7 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     timerHandleRef.current = setInterval(() => {
       if (!isTimerCurrent(myTimerGen) || !isSessionCurrent(mySessionGen)) return;
       if (Date.now() - lastVoiceTsRef.current > TRAILING_SILENCE_MS) {
+        console.log('[machine] trailing silence threshold hit, sessionGen=', mySessionGen);
         fnsRef.current.finalizeAnswer(mySessionGen);
       }
     }, 200);
@@ -237,7 +214,11 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   }
 
   async function finalizeAnswer(mySessionGen) {
-    if (!isSessionCurrent(mySessionGen)) return;
+    console.log('[machine] finalizeAnswer() called, mySessionGen=', mySessionGen, 'currentSessionGen=', sessionGenRef.current);
+    if (!isSessionCurrent(mySessionGen)) {
+      console.log('[machine] finalizeAnswer BAILED — session mismatch');
+      return;
+    }
     isRepeatPassRef.current = false;
 
     clearPendingTimer();
@@ -249,15 +230,21 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     let blob = null;
     try {
       blob = await capture.stop();
-    } catch {
-      /* fall through */
+      console.log('[machine] capture.stop() resolved, blob=', blob);
+    } catch (err) {
+      console.log('[machine] capture.stop() THREW:', err);
     }
-    if (!isSessionCurrent(nextSessionGen)) return;
+    if (!isSessionCurrent(nextSessionGen)) {
+      console.log('[machine] finalizeAnswer BAILED after stop() — superseded');
+      return;
+    }
 
     const audioBlob = blob || new Blob([], { type: 'audio/mp3' });
 
     try {
+      console.log('[machine] calling submitAnswer()');
       const next = await submitAnswer(interviewId, audioBlob);
+      console.log('[machine] submitAnswer() resolved:', next);
       if (!isSessionCurrent(nextSessionGen)) return;
 
       if (!next || !next.question) {
@@ -274,25 +261,25 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
       setQuestion(next);
       setState(STATES.AI_SPEAKING);
     } catch (err) {
+      console.log('[machine] submitAnswer() THREW:', err);
       if (!isSessionCurrent(nextSessionGen)) return;
       setState(STATES.FATAL_ERROR);
       onFatal?.(err.message || 'Something went wrong submitting your answer.');
     }
   }
 
-  /**
-   * Manual finish (Problem 2 / Method B). Reads `activeSessionGenRef` —
-   * always written by the LISTENING-entry effect for the currently live
-   * session — and calls through `fnsRef` so it always reaches the CURRENT
-   * render's real `finalizeAnswer`, regardless of how many question
-   * cycles have happened. This is what was breaking after Q2: the old
-   * code called `finalizeAnswer` directly by name, which (per the root
-   * cause above) could be a stale closure by then.
-   */
   const finishAnswering = useCallback(() => {
+    console.log('[machine] finishAnswering() called, activeSessionGen=', activeSessionGenRef.current, 'isSessionCurrent=', isSessionCurrent(activeSessionGenRef.current), 'state=', state);
     const mySessionGen = activeSessionGenRef.current;
-    if (mySessionGen === null || !isSessionCurrent(mySessionGen)) return;
-    if (state !== STATES.LISTENING && state !== STATES.SILENCE_WARNING) return;
+    if (mySessionGen === null || !isSessionCurrent(mySessionGen)) {
+      console.log('[machine] finishAnswering BAILED — session mismatch');
+      return;
+    }
+    if (state !== STATES.LISTENING && state !== STATES.SILENCE_WARNING) {
+      console.log('[machine] finishAnswering BAILED — wrong state:', state);
+      return;
+    }
+    console.log('[machine] finishAnswering PROCEEDING to finalizeAnswer');
     fnsRef.current.finalizeAnswer(mySessionGen);
   }, [state, isSessionCurrent]);
 
@@ -336,9 +323,6 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reassign EVERY render, unconditionally, so fnsRef.current always holds
-  // this render's real functions — the single fix eliminating the stale-
-  // closure drift described above.
   fnsRef.current = {
     armInitialSilenceWatch,
     armWarningGraceWatch,
