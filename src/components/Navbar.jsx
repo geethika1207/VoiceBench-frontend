@@ -10,7 +10,7 @@ export default function Navbar() {
       <div className="container navbar-inner">
         <Link to="/" className="navbar-brand">
           <span className="navbar-mark" />
-          Voicebench
+          VoiceBench
         </Link>
 
         {isAuthenticated ? (
