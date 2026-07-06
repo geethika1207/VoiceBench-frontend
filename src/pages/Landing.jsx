@@ -28,7 +28,7 @@ export default function Landing() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.05 }}
           >
-            Practice real technical interviews with an AI voice interviewer
+            Master Any Topic Through Real-Time AI Voice Conversations
           </motion.h1>
 
           <motion.p
@@ -37,8 +37,8 @@ export default function Landing() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.12 }}
           >
-            Experience adaptive AI interviews with live voice conversations, automatic
-            evaluation, detailed reports, and full interview history.
+            Practice topic-focused voice conversations with an adaptive AI interviewer. 
+            Receive automatic evaluation, detailed performance reports, and complete interview history.
           </motion.p>
 
           <motion.div
