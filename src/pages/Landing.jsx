@@ -119,8 +119,8 @@ export default function Landing() {
           flex-direction: column;
           align-items: center;
           text-align: center;
-          padding-top: 64px;
-          padding-bottom: 40px;
+          padding-top: 40px;
+          padding-bottom: 20px;
           position: relative;
         }
         .landing::before {
@@ -135,33 +135,35 @@ export default function Landing() {
           z-index: 0;
         }
         .hero-title {
-          font-size: clamp(34px, 5.4vw, 62px);
-          max-width: 820px;
-          margin-top: 24px;
+          font-size: clamp(32px, 5vw, 56px);
+          max-width: 760px;
+          margin-top: 16px;
+          line-height: 1.1;
         }
         .hero-subtitle {
-          max-width: 560px;
-          font-size: 17px;
-          margin-top: 20px;
+          max-width: 620px;
+          font-size: 16px;
+          margin-top: 14px;
+          line-height: 1.6;
         }
         .hero-actions {
           display: flex;
           gap: 14px;
-          margin-top: 34px;
+          margin-top: 22px;
           flex-wrap: wrap;
           justify-content: center;
         }
         .hero-waveform {
-          margin-top: 64px;
-          max-width: 800px;
+          margin-top: 34px;
+          max-width: 760px;
           width: 100%;
-          opacity: 0.85;
+          opacity: 0.9;
         }
         .features-grid {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: 18px;
-          margin-top: 40px;
+          margin-top: 18px;
           position: relative;
           z-index: 1;
         }
