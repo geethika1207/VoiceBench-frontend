@@ -136,7 +136,7 @@ export default function InterviewScreen() {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [state, question]);
 
   if (!firstQuestion) {
