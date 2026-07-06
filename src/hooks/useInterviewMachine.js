@@ -25,10 +25,9 @@ const MAX_SILENCE_SKIPS = 3;
 export function useInterviewMachine({
     interviewId,
     firstQuestion,
-    autoStart = true,
     onFinished,
     onFatal,
-  }) {  const [state, setState] = useState(autoStart ? STATES.AI_SPEAKING : null);
+  }) {  const [state, setState] = useState(STATES.AI_SPEAKING);
   const [question, setQuestion] = useState(firstQuestion || null);
   const [transcript, setTranscript] = useState('');
   const [notice, setNotice] = useState(null);
@@ -66,12 +65,7 @@ export function useInterviewMachine({
     setState((current) => (current === STATES.REPEAT_QUESTION ? STATES.WAIT_AFTER_AUDIO : current));
   }, []);
 
-  useEffect(() => {
-    if (autoStart && state === null) {
-      setState(STATES.AI_SPEAKING);
-    }
-  }, [autoStart, state]);
-
+  
   useEffect(() => {
     if (state !== STATES.WAIT_AFTER_AUDIO) return;
     console.log('[machine] entered WAIT_AFTER_AUDIO');
