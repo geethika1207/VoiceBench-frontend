@@ -22,16 +22,7 @@ export default function InterviewScreen() {
   const firstQuestion = location.state?.firstQuestion || null;
   const [topicLabel] = useState(() => firstQuestion?.title || firstQuestion?.topic || 'Live interview');
   const [elapsed, setElapsed] = useState(0);
-  const [showIntro, setShowIntro] = useState(true);
   const [fatalError, setFatalError] = useState(null);
-
-  const machine = useInterviewMachine({
-    interviewId: id,
-    firstQuestion: showIntro ? null : firstQuestion,
-    onFinished: (report) =>
-      navigate('/report', { state: { report, interviewId: id } }),
-    onFatal: (message) => setFatalError(message),
-  });
 
   const {
     state,
@@ -44,8 +35,12 @@ export default function InterviewScreen() {
     notifyRepeatFinished,
     endManually,
     finishAnswering,
-  } = machine;
-
+  } = useInterviewMachine({
+    interviewId: id,
+    firstQuestion,
+    onFinished: (report) => navigate('/report', { state: { report, interviewId: id } }),
+    onFatal: (message) => setFatalError(message),
+  });
   const audioRef = useRef(null);
   if (!audioRef.current) {
     audioRef.current = getSharedAudioElement();
@@ -63,14 +58,6 @@ export default function InterviewScreen() {
     const start = Date.now();
     const t = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
     return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowIntro(false);
-    }, 3000);
-
-    return () => clearTimeout(timer);
   }, []);
 
   // ---- subtitle: ONLY the question itself is ever spoken/shown as spoken text. ----
@@ -152,7 +139,7 @@ export default function InterviewScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, question]);
 
-  if (!firstQuestion && !showIntro) {
+  if (!firstQuestion) {
     return (
       <CenteredMessage
         title="No active interview"
@@ -202,19 +189,6 @@ export default function InterviewScreen() {
 
 return (
   <div className="interview-screen">
-
-    {showIntro && (
-      <div className="intro-overlay">
-        <div className="intro-highlight">
-          <div className="welcome-bubble glass">
-            {WELCOME_LINES.map((line, i) => (
-              <p key={i}>{line}</p>
-            ))}
-          </div>
-        </div>
-      </div>
-    )}
-
     <div className="interview-top container">
       <div className="interview-top-left">
         <span className="interview-topic">{topicLabel}</span>
@@ -238,14 +212,7 @@ return (
       </div>
 
       <div className="interview-center">
-        {!showIntro && question && (
-          <VoiceAvatar
-            status={avatarStatus}
-            level={level}
-            onClick={isListeningPhase ? finishAnswering : null}
-          />
-        )}
-        {!showIntro && question && (
+        <VoiceAvatar status={avatarStatus} level={level} onClick={isListeningPhase ? finishAnswering : null} />
         <div className="status-line">
           {state === STATES.AI_SPEAKING && <span className="status-pill pill-violet">Speaking</span>}
           {state === STATES.REPEAT_QUESTION && <span className="status-pill pill-violet">Repeating the question…</span>}
@@ -253,9 +220,7 @@ return (
           {state === STATES.SILENCE_WARNING && <span className="status-pill pill-teal">🎤 Still listening…</span>}
           {state === STATES.PROCESSING_ANSWER && <span className="status-pill pill-violet">Preparing next question…</span>}
         </div>
-        )}
 
-        {!showIntro && question && (
         <AnimatePresence mode="wait">
           <motion.p
             key={spokenText}
@@ -268,7 +233,7 @@ return (
             {subtitleText}
           </motion.p>
         </AnimatePresence>
-        )}
+        
 
         <AnimatePresence>
           {notice && (
@@ -432,36 +397,6 @@ return (
         .ring-3 {
           width: 200px;
           height: 200px;
-        }
-        .intro-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0,0,0,0.72);
-          display: flex;
-          align-items: flex-start;
-          justify-content: center;
-          padding-top: 110px;
-          z-index: 9999;
-          animation: fadeIn .25s ease;
-        }
-
-        .intro-highlight {
-          transform: scale(1.05);
-        }
-
-        .intro-highlight .welcome-bubble {
-          box-shadow:
-            0 0 35px rgba(124,92,252,.45),
-            0 0 70px rgba(63,216,201,.25);
-        }
-
-        @keyframes fadeIn {
-          from {
-            opacity:0;
-          }
-          to{
-            opacity:1;
-          }
         }
       `}</style>
     </div>
