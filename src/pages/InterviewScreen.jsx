@@ -27,7 +27,8 @@ export default function InterviewScreen() {
 
   const machine = useInterviewMachine({
     interviewId: id,
-    firstQuestion,
+    firstQuestion: showIntro ? null : firstQuestion,
+    autoStart: !showIntro,
     onFinished: (report) =>
       navigate('/report', { state: { report, interviewId: id } }),
     onFatal: (message) => setFatalError(message),

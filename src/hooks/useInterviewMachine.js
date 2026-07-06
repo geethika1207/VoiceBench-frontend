@@ -22,8 +22,13 @@ const TRAILING_SILENCE_MS = 2200;
 const VOLUME_THRESHOLD = 0.02;
 const MAX_SILENCE_SKIPS = 3;
 
-export function useInterviewMachine({ interviewId, firstQuestion, onFinished, onFatal }) {
-  const [state, setState] = useState(STATES.AI_SPEAKING);
+export function useInterviewMachine({
+    interviewId,
+    firstQuestion,
+    autoStart = true,
+    onFinished,
+    onFatal,
+  }) {  const [state, setState] = useState(autoStart ? STATES.AI_SPEAKING : null);
   const [question, setQuestion] = useState(firstQuestion || null);
   const [transcript, setTranscript] = useState('');
   const [notice, setNotice] = useState(null);
@@ -60,6 +65,12 @@ export function useInterviewMachine({ interviewId, firstQuestion, onFinished, on
   const notifyRepeatFinished = useCallback(() => {
     setState((current) => (current === STATES.REPEAT_QUESTION ? STATES.WAIT_AFTER_AUDIO : current));
   }, []);
+
+  useEffect(() => {
+    if (autoStart && state === null) {
+      setState(STATES.AI_SPEAKING);
+    }
+  }, [autoStart, state]);
 
   useEffect(() => {
     if (state !== STATES.WAIT_AFTER_AUDIO) return;
